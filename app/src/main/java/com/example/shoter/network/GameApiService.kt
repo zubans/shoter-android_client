@@ -38,7 +38,7 @@ interface GameApiService {
 }
 
 object GameApi {
-    private const val BASE_URL = "http://94.103.9.172:8080/api/"
+    private const val BASE_URL = "http://192.168.1.36:8080/api/users/"
     
     private val retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)
