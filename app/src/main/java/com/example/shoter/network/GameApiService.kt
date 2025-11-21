@@ -1,21 +1,27 @@
 package com.example.shoter.network
 
+import com.example.shoter.BuildConfig
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.POST
 
-data class PlayerEliminationRequest(
-    val playerId: String,
-    val eliminatorId: String,
-    val timestamp: Long
+data class PhotoPayload(
+    val angle: String,
+    val original: String,
+    val face: String? = null,
+    val body: String? = null,
+    val capturedAt: Long,
+    val width: Int,
+    val height: Int
 )
 
 data class PlayerProfileRequest(
     val playerId: String,
-    val images: List<String>, // Base64 encoded images
-    val angles: List<String> // "front", "left", "right", "back"
+    val images: List<String>, // Base64 encoded face crops (legacy field)
+    val angles: List<String>, // "front", "left", "right", "back"
+    val photos: List<PhotoPayload>? = null
 )
 
 data class ApiResponse(
@@ -24,9 +30,6 @@ data class ApiResponse(
 )
 
 interface GameApiService {
-    @POST("eliminate-player")
-    suspend fun eliminatePlayer(@Body request: PlayerEliminationRequest): Response<ApiResponse>
-    
     @POST("create-player-profile")
     suspend fun createPlayerProfile(@Body request: PlayerProfileRequest): Response<ApiResponse>
 
@@ -38,10 +41,8 @@ interface GameApiService {
 }
 
 object GameApi {
-    private const val BASE_URL = "http://192.168.1.36:8080/api/users/"
-    
     private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
+        .baseUrl(BuildConfig.BACKEND_BASE_URL)
         .addConverterFactory(GsonConverterFactory.create())
         .build()
     

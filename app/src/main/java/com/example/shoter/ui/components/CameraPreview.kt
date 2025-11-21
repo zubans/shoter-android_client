@@ -5,6 +5,7 @@ import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -26,11 +27,18 @@ import kotlin.math.abs
 @Composable
 fun CameraPreview(
     modifier: Modifier = Modifier,
-    gameViewModel: GameViewModel
+    gameViewModel: GameViewModel,
+    onImageCaptureReady: (ImageCapture) -> Unit = {}
 ) {
     val context = LocalContext.current
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+    }
 
     AndroidView(
         factory = { ctx ->
@@ -99,8 +107,10 @@ fun CameraPreview(
                     context as LifecycleOwner,
                     cameraSelector,
                     preview,
-                    imageAnalysis
+                    imageAnalysis,
+                    imageCapture
                 )
+                onImageCaptureReady(imageCapture)
             } catch (exc: Exception) {
                 Log.e("CameraPreview", "Use case binding failed", exc)
             }

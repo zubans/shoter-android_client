@@ -3,7 +3,8 @@ package com.example.shoter.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.shoter.network.GameApi
-import com.example.shoter.network.PlayerEliminationRequest
+import com.example.shoter.network.GameApiService
+import com.example.shoter.network.PhotoPayload
 import com.example.shoter.network.PlayerProfileRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +17,8 @@ data class GameUiState(
     val isInTargetingMode: Boolean = false,
     val playerProfiles: List<String> = emptyList(),
     val currentPlayerId: String = "",
-    val eliminationMessage: String = ""
+    val eliminationMessage: String = "",
+    val isShotInProgress: Boolean = false
 )
 
 class GameViewModel : ViewModel() {
@@ -33,23 +35,26 @@ class GameViewModel : ViewModel() {
     }
 
     fun onCrosshairCentered() {
-        if (_uiState.value.isPlayerDetected) {
-            // Trigger elimination
-            eliminateDetectedPlayer()
-        }
+        // No-op: shot is initiated explicitly via UI button
     }
 
     fun setTargetingMode(enabled: Boolean) {
         _uiState.value = _uiState.value.copy(isInTargetingMode = enabled)
     }
 
-    fun createPlayerProfile(playerId: String, images: List<String>, angles: List<String>) {
+    fun createPlayerProfile(
+        playerId: String,
+        images: List<String>,
+        angles: List<String>,
+        photos: List<PhotoPayload> = emptyList()
+    ) {
         viewModelScope.launch {
             try {
                 val request = PlayerProfileRequest(
                     playerId = playerId,
                     images = images,
-                    angles = angles
+                    angles = angles,
+                    photos = photos.takeIf { it.isNotEmpty() }
                 )
 
                 Log.d("HTTP", "Отправляю createPlayerProfile: $playerId")
@@ -70,36 +75,54 @@ class GameViewModel : ViewModel() {
         }
     }
 
-    private fun eliminateDetectedPlayer() {
-        viewModelScope.launch {
-            try {
-                val request = PlayerEliminationRequest(
-                    playerId = "detected_player_id", // This should come from player recognition
-                    eliminatorId = _uiState.value.currentPlayerId,
-                    timestamp = System.currentTimeMillis()
-                )
-                
-                val response = GameApi.service.eliminatePlayer(request)
-                if (response.isSuccessful) {
-                    _uiState.value = _uiState.value.copy(
-                        eliminationMessage = "Player eliminated!",
-                        isPlayerDetected = false
-                    )
-                    Log.d("GameViewModel", "Player eliminated successfully")
-                } else {
-                    Log.e("GameViewModel", "Failed to eliminate player: ${response.message()}")
-                }
-            } catch (e: Exception) {
-                Log.e("GameViewModel", "Error eliminating player", e)
-            }
-        }
-    }
-
     fun setCurrentPlayerId(playerId: String) {
         _uiState.value = _uiState.value.copy(currentPlayerId = playerId)
     }
 
     fun clearEliminationMessage() {
         _uiState.value = _uiState.value.copy(eliminationMessage = "")
+    }
+
+    fun startShot() {
+        if (_uiState.value.isShotInProgress) return
+        _uiState.value = _uiState.value.copy(isShotInProgress = true, eliminationMessage = "")
+    }
+
+    fun submitShot(imageBase64: String) {
+        viewModelScope.launch {
+            try {
+                val response = GameApi.service.identifyPlayer(GameApiService.FaceImageRequest(imageBase64))
+                if (response.isSuccessful) {
+                    val body = response.body()
+                    val message = when {
+                        body == null -> "Сервер не вернул результат"
+                        body.isNew -> "Обнаружен новый игрок: ${body.playerId}"
+                        else -> "Попадание по ${body.playerId}"
+                    }
+                    _uiState.value = _uiState.value.copy(eliminationMessage = message)
+                } else if (response.code() == 404) {
+                    _uiState.value = _uiState.value.copy(
+                        eliminationMessage = "Профиль не найден"
+                    )
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        eliminationMessage = "Ошибка распознавания: ${response.code()}"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    eliminationMessage = "Сбой распознавания: ${e.message}"
+                )
+            } finally {
+                _uiState.value = _uiState.value.copy(isShotInProgress = false)
+            }
+        }
+    }
+
+    fun onShotFailed(message: String) {
+        _uiState.value = _uiState.value.copy(
+            eliminationMessage = message,
+            isShotInProgress = false
+        )
     }
 }

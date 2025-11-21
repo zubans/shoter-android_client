@@ -1,9 +1,9 @@
 package com.example.shoter.ui.screens
 
-import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Size
 import android.widget.Toast
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,7 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import com.example.shoter.util.encodeBitmapToBase64
+import com.example.shoter.network.PhotoPayload
+import com.example.shoter.util.processCapturedPhoto
 import com.example.shoter.viewmodel.GameViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -49,14 +51,22 @@ fun PlayerRegistrationScreen(
     val context = LocalContext.current
     val cameraPermissionState = rememberPermissionState(android.Manifest.permission.CAMERA)
     val lifecycleOwner = LocalContext.current as LifecycleOwner
-    val imageCapture = remember { ImageCapture.Builder().build() }
+    val imageCapture = remember {
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setTargetResolution(Size(1280, 720))
+            .build()
+    }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     val angles = listOf("front", "left", "right", "back")
     var currentAngleIndex by remember { mutableStateOf(0) }
-    var capturedImages by remember { mutableStateOf(mutableListOf<String>()) }
-    var capturedAngles by remember { mutableStateOf(mutableListOf<String>()) }
+    var capturedImages by remember { mutableStateOf(listOf<String>()) }
+    var capturedAngles by remember { mutableStateOf(listOf<String>()) }
+    val capturedPayloads = remember { mutableStateListOf<PhotoPayload>() }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var isProcessing by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -87,7 +97,7 @@ fun PlayerRegistrationScreen(
                             it.setSurfaceProvider(view.surfaceProvider)
                         }
 
-                        val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
                         try {
                             cameraProvider.unbindAll()
@@ -111,52 +121,91 @@ fun PlayerRegistrationScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = {
-                val outputFile =
-                    File(context.cacheDir, "player_photo_${angles[currentAngleIndex]}.jpg")
-                val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
+            Button(
+                enabled = !isProcessing,
+                onClick = {
+                    isProcessing = true
+                    val outputFile =
+                        File(context.cacheDir, "player_photo_${angles[currentAngleIndex]}.jpg")
+                    val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
 
-                imageCapture.takePicture(
-                    outputOptions,
-                    cameraExecutor,
-                    object : ImageCapture.OnImageSavedCallback {
-                        override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                            val bitmap = BitmapFactory.decodeFile(outputFile.absolutePath)
-                            val base64Image = encodeBitmapToBase64(bitmap)
+                    imageCapture.takePicture(
+                        outputOptions,
+                        cameraExecutor,
+                        object : ImageCapture.OnImageSavedCallback {
+                            override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                                try {
+                                    val processingResult = processCapturedPhoto(
+                                        file = outputFile,
+                                        angle = angles[currentAngleIndex]
+                                    )
+                                    outputFile.delete()
 
-                            capturedImages.add(base64Image)
-                            capturedAngles.add(angles[currentAngleIndex])
+                                    mainHandler.post {
+                                        capturedImages = capturedImages + processingResult.legacyImage
+                                        capturedAngles = capturedAngles + angles[currentAngleIndex]
+                                        capturedPayloads.add(processingResult.payload)
 
-                            if (currentAngleIndex < angles.size - 1) {
-                                currentAngleIndex++
-                            } else {
-                                val playerId = UUID.randomUUID().toString()
-                                gameViewModel.createPlayerProfile(
-                                    playerId = playerId,
-                                    images = capturedImages,
-                                    angles = capturedAngles
-                                )
+                                        if (currentAngleIndex < angles.size - 1) {
+                                            currentAngleIndex++
+                                        } else {
+                                            val playerId = UUID.randomUUID().toString()
+                                            gameViewModel.createPlayerProfile(
+                                                playerId = playerId,
+                                                images = capturedImages,
+                                                angles = capturedAngles,
+                                                photos = capturedPayloads.toList()
+                                            )
 
-                                Handler(Looper.getMainLooper()).post {
-                                    Toast.makeText(context, "Профиль отправлен", Toast.LENGTH_SHORT)
-                                        .show()
-                                    onDone()
+                                            Toast.makeText(
+                                                context,
+                                                "Профиль отправлен",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            onDone()
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    outputFile.delete()
+                                    Log.e("PlayerReg", "Ошибка обработки фото", e)
+                                    mainHandler.post {
+                                        Toast.makeText(
+                                            context,
+                                            "Ошибка обработки фото: ${e.message}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                } finally {
+                                    mainHandler.post { isProcessing = false }
+                                }
+                            }
+
+                            override fun onError(exception: ImageCaptureException) {
+                                Log.e("PlayerReg", "Ошибка сохранения фото", exception)
+                                outputFile.delete()
+                                mainHandler.post {
+                                    isProcessing = false
+                                    Toast.makeText(
+                                        context,
+                                        "Не удалось сделать фото: ${exception.message}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                         }
-
-                        override fun onError(exception: ImageCaptureException) {
-                            Log.e("PlayerReg", "Ошибка сохранения фото", exception)
-                        }
-                    }
-                )
-            }) {
-                Text(
-                    if (currentAngleIndex < angles.size - 1)
-                        "Сделать фото (${angles[currentAngleIndex]})"
-                    else
-                        "Сделать последнее фото и зарегистрировать"
-                )
+                    )
+                }
+            ,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+            ) {
+                val buttonText = if (currentAngleIndex < angles.size - 1) {
+                    if (isProcessing) "Обработка..." else "Сделать фото (${angles[currentAngleIndex]})"
+                } else {
+                    if (isProcessing) "Обработка..." else "Сделать последнее фото и зарегистрировать"
+                }
+                Text(buttonText)
             }
         }
     }

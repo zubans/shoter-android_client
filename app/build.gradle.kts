@@ -1,3 +1,33 @@
+import java.io.File
+
+fun loadEnvMap(vararg files: File?): Map<String, String> {
+    val result = mutableMapOf<String, String>()
+    files.filterNotNull().forEach { file ->
+        if (!file.exists()) return@forEach
+        file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .forEach { line ->
+                val parts = line.split("=", limit = 2)
+                if (parts.size == 2) {
+                    result[parts[0].trim()] = parts[1].trim()
+                }
+            }
+    }
+    return result
+}
+
+fun String.toBuildConfigString(): String =
+    this.replace("\\", "\\\\").replace("\"", "\\\"")
+
+val envValues = loadEnvMap(
+    rootProject.file(".env"),
+    rootProject.projectDir.parentFile?.resolve(".env")
+)
+val backendBaseUrl =
+    envValues["BACKEND_BASE_URL"]?.takeIf { it.isNotBlank() }
+        ?: "http://192.168.1.36:8080/api/users/"
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -12,10 +42,15 @@ android {
         applicationId = "com.example.shoter"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "BACKEND_BASE_URL",
+            "\"${backendBaseUrl.toBuildConfigString()}\""
+        )
     }
 
     buildTypes {
@@ -36,6 +71,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -63,6 +99,7 @@ dependencies {
     // ML Kit Pose Detection dependency
     implementation("com.google.mlkit:pose-detection:18.0.0-beta4")
     implementation("com.google.mlkit:pose-detection-accurate:18.0.0-beta4")
+    implementation("com.google.mlkit:face-detection:16.1.5")
     
     // Networking for server communication
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
